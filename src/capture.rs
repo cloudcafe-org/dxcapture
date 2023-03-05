@@ -104,15 +104,28 @@ impl Capture {
         )?;
         let session = frame_pool.CreateCaptureSession(&device.item)?;
 
-        // to thread safety
+
         let (tx, rx) = crossbeam::channel::unbounded();
         let on_frame_arrived = FrameArrivedHandler::new({
+            let d3d_device = device.d3d_device.clone();
+            let d3d_context = d3d_context.clone();
             move |frame_pool, _| {
                 let frame = frame_pool.as_ref().unwrap().TryGetNextFrame()?;
                 let surface = frame.Surface()?;
 
                 let frame_texture = Device::from_direct3d_surface(&surface)?;
 
+                // Make a copy of the texture cause otherwise this crashes
+                let mut desc = D3D11_TEXTURE2D_DESC::default();
+                unsafe {
+                    frame_texture.GetDesc(&mut desc);
+                }
+                let copy_texture = unsafe {
+                    let copy_texture = d3d_device.CreateTexture2D( &desc, std::ptr::null() )?;
+                    d3d_context.CopyResource(&copy_texture, &frame_texture);
+
+                    copy_texture
+                };
                 tx.send(frame_texture).unwrap();
                 Ok(())
             }
@@ -142,7 +155,6 @@ impl Capture {
 
         Ok(())
     }
-
 }
 impl Drop for Capture {
     fn drop(&mut self) {
