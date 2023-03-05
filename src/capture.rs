@@ -2,6 +2,8 @@ use std::sync::{
     Arc,
     Mutex
 };
+use std::thread;
+use std::time::Duration;
 use winapi::{
     shared::dxgiformat::{
         DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -85,7 +87,7 @@ pub struct Capture {
     frame_pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
     _on_frame_arrived: FrameArrivedHandler,
-    texture: Arc<Mutex<Option<ID3D11Texture2D>>>,
+    pub rx: crossbeam::channel::Receiver<ID3D11Texture2D>,
     active: bool,
 }
 impl Capture {
@@ -103,38 +105,15 @@ impl Capture {
         let session = frame_pool.CreateCaptureSession(&device.item)?;
 
         // to thread safety
-        let texture = Arc::new(Mutex::new(None));
-
+        let (tx, rx) = crossbeam::channel::unbounded();
         let on_frame_arrived = FrameArrivedHandler::new({
-            let d3d_device = device.d3d_device.clone();
-            let d3d_context = d3d_context.clone();
-            let texture = texture.clone();
-            
             move |frame_pool, _| {
                 let frame = frame_pool.as_ref().unwrap().TryGetNextFrame()?;
                 let surface = frame.Surface()?;
 
                 let frame_texture = Device::from_direct3d_surface(&surface)?;
 
-                // Make a copy of the texture
-                let mut desc = D3D11_TEXTURE2D_DESC::default();
-                unsafe {
-                    frame_texture.GetDesc(&mut desc);
-                }
-                // Make this a staging texture
-                desc.Usage = D3D11_USAGE_STAGING as i32;
-                desc.BindFlags = 0;
-                desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-                desc.MiscFlags = 0;
-                let copy_texture = unsafe {
-                    let copy_texture = d3d_device.CreateTexture2D( &desc, std::ptr::null() )?;
-                    d3d_context.CopyResource(&copy_texture, &frame_texture);
-
-                    copy_texture
-                };
-
-                *texture.lock().unwrap() = Some(copy_texture);
-
+                tx.send(frame_texture).unwrap();
                 Ok(())
             }
         });
@@ -149,7 +128,7 @@ impl Capture {
             frame_pool,
             session,
             _on_frame_arrived: on_frame_arrived,
-            texture,
+            rx,
             active: true,
         })
     }
@@ -164,93 +143,6 @@ impl Capture {
         Ok(())
     }
 
-    fn take(&self) -> anyhow::Result<IDirect3DSurface, CaptureError> {
-        if !self.active {
-            return Err(CaptureError::NotActive);
-        }
-        if self.texture.lock().unwrap().is_none() {
-            return Err(CaptureError::NoTexture);
-        }
-
-        // Wait for our texture to come
-        let surface = Device::to_direct3d_surface(
-            self.texture.lock().unwrap().as_ref().unwrap()
-        ).map_err(|e| CaptureError::DirectxError(e))?;
-
-        Ok(surface)
-    }
-
-    /// rap surface to [RawFrameData]
-    fn surface_to_data(&self, surface: &IDirect3DSurface) -> anyhow::Result<RawFrameData, CaptureError> {
-        let d3d_texture = Device::from_direct3d_surface(surface).map_err(|e| CaptureError::DirectxError(e))?;
-
-        // Make sure the surface is a pixel format we support
-        let desc = unsafe {
-            let mut desc = D3D11_TEXTURE2D_DESC::default();
-            d3d_texture.GetDesc(&mut desc);
-
-            desc
-        };
-        let width = desc.Width;
-        let height = desc.Height;
-        let bytes_per_pixel = match desc.Format {
-            DXGI_FORMAT_B8G8R8A8_UNORM => 4,
-            _ => return Err(CaptureError::UnsupportedPixelFormat(desc.Format)),
-        };
-
-        // TODO: If the texture isn't marked for staging, make a copy
-        let d3d_texture = if desc.Usage as u32 == D3D11_USAGE_STAGING {
-            if (desc.CPUAccessFlags & D3D11_CPU_ACCESS_READ) == D3D11_CPU_ACCESS_READ {
-                d3d_texture
-            } else {
-                return Err(CaptureError::DeniedAccessCpuRead);
-            }
-        } else {
-            return Err(CaptureError::UnsupportedBufferType);
-        };
-
-        // Map the texture
-        let mapped = unsafe {
-            self.d3d_context.Map(&d3d_texture, 0, D3D11_MAP_READ as i32, 0)
-                .map_err(|e| CaptureError::DirectxError(e))?
-        };
-
-        // Get a slice of bytes
-        let slice: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                mapped.pData as *const _,
-                (height * mapped.RowPitch) as usize,
-            )
-        };
-
-        // Make a copy of the data
-        let mut data = vec![0u8; ((width * height) * bytes_per_pixel) as usize];
-        for row in 0..height {
-            let data_begin = (row * (width * bytes_per_pixel)) as usize;
-            let data_end = ((row + 1) * (width * bytes_per_pixel)) as usize;
-            let slice_begin = (row * mapped.RowPitch) as usize;
-            let slice_end = slice_begin + (width * bytes_per_pixel) as usize;
-            data[data_begin..data_end].copy_from_slice(&slice[slice_begin..slice_end]);
-        }
-
-        // Unmap the texture
-        unsafe {
-            self.d3d_context.Unmap(&d3d_texture, 0);
-        }
-
-        Ok(RawFrameData{
-            width: width as i32,
-            height: height as i32,
-            data
-        })
-    }
-
-    /// Return rapped current frame with [RawFrameData]
-    pub fn get_raw_frame(&self) -> anyhow::Result<RawFrameData, CaptureError> {
-        let surface = self.take()?;
-
-        self.surface_to_data(&surface)
-    }
 }
 impl Drop for Capture {
     fn drop(&mut self) {
