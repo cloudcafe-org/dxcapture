@@ -157,6 +157,12 @@ impl Device {
         Ok(Self::new( item ))
     }
 
+    pub fn new_from_hwnd(hwnd: HWND) -> anyhow::Result<Self> {
+        let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
+        let item: GraphicsCaptureItem = unsafe { interop.CreateForWindow(hwnd)?};
+        Ok(Self::new(item))
+    }
+
     pub fn get_immediate_context(d3d_device: &ID3D11Device) -> windows::core::Result<ID3D11DeviceContext> {
         Ok(unsafe {
             let mut d3d_context: Option<ID3D11DeviceContext> = Some(
