@@ -139,6 +139,12 @@ impl Device {
         Ok(Self::new( item ))
     }
 
+    pub fn new_from_handle(handle: isize) -> anyhow::Result<Self> {
+        let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
+        let item: GraphicsCaptureItem = unsafe { interop.CreateForMonitor(HMONITOR(handle))?};
+        Ok(Self::new(item))
+    }
+
     /// Create Device from window caption.
     /// ## Parameters
     /// * window_caption: Window caption of the target window. default is created by [GetDesktopWindow].

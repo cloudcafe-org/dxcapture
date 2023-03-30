@@ -14,6 +14,7 @@ use winapi::{
         D3D11_USAGE_STAGING,
     }
 };
+use winapi::um::winuser::GetWindowRect;
 use windows::{
     Graphics::{
         Capture::{
@@ -38,6 +39,7 @@ use windows::{
         },
     }
 };
+use windows::Win32::Foundation::RECT;
 
 type FrameArrivedHandler =
     windows::Foundation::TypedEventHandler<Direct3D11CaptureFramePool, windows::core::IInspectable>;
@@ -126,7 +128,12 @@ impl Capture {
 
                     copy_texture
                 };
-                tx.send(frame_texture).unwrap();
+                match tx.send(frame_texture) {
+                    Ok(_) => {},
+                    Err(_) => {
+                        //probably resized texture
+                    }
+                }
                 Ok(())
             }
         });
@@ -158,7 +165,12 @@ impl Capture {
 }
 impl Drop for Capture {
     fn drop(&mut self) {
-        self.release().unwrap();
+        match self.release() {
+            Ok(_) => {},
+            Err(err) => {
+                println!("err: {:?}", err.to_string());
+            }
+        }
     }
 }
 

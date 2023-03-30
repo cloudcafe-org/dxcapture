@@ -1,3 +1,4 @@
+use std::mem;
 /// author: Robert Mikhayelyan <rob.mikh@outlook.com>
 
 use winapi::{
@@ -12,6 +13,7 @@ use winapi::{
 pub struct DisplayInfo {
     pub handle: HMONITOR,
     pub display_name: String,
+    pub monitor_rect: windows::Win32::Foundation::RECT,
 }
 
 extern "system" fn enum_monitor(handle: HMONITOR, _: HDC, _: LPRECT, lparam: LPARAM) -> BOOL {
@@ -24,6 +26,7 @@ extern "system" fn enum_monitor(handle: HMONITOR, _: HDC, _: LPRECT, lparam: LPA
         // TODO: GetLastError
         // TODO: ErrorCode conversion
     }
+    
 
     let display_name = String::from_utf16_lossy(&monitor_info.szDevice)
         .trim_matches(char::from(0))
@@ -32,6 +35,12 @@ extern "system" fn enum_monitor(handle: HMONITOR, _: HDC, _: LPRECT, lparam: LPA
     let info = DisplayInfo {
         handle: handle,
         display_name: display_name,
+        monitor_rect: windows::Win32::Foundation::RECT {
+            left: monitor_info.rcMonitor.left,
+            top: monitor_info.rcMonitor.top,
+            right: monitor_info.rcMonitor.right,
+            bottom: monitor_info.rcMonitor.bottom,
+        },
     };
 
     unsafe {

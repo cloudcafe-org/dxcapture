@@ -1,3 +1,4 @@
+use std::ptr::null_mut;
 /// author: Robert Mikhayelyan <rob.mikh@outlook.com>
 
 use winapi::{
@@ -15,6 +16,7 @@ use winapi::{
         },
     },
 };
+use winapi::um::winuser::{EnumChildWindows, EnumThreadWindows, GetWindowThreadProcessId};
 
 #[derive(Debug, Clone)]
 pub struct WindowInfo {
@@ -95,6 +97,22 @@ fn is_capturable_window(window: &WindowInfo) -> bool {
     return true;
 }
 
+extern "system" fn enum_child_windows(handle: HWND, lparam: LPARAM) -> BOOL {
+    unsafe {
+        let list = std::mem::transmute::<LPARAM, *mut Vec<HWND>>(lparam);
+        (*list).push(handle);
+    };
+    return 1;
+}
+
+extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    unsafe {
+        let list = std::mem::transmute::<LPARAM, *mut Vec<isize>>(lparam);
+        (*list).push(hwnd as isize);
+    };
+    return 1;
+}
+
 extern "system" fn enum_window(handle: HWND, lparam: LPARAM) -> BOOL {
     let window_text_length = unsafe { GetWindowTextLengthW(handle) };
     if window_text_length > 0 {
@@ -135,6 +153,23 @@ extern "system" fn enum_window(handle: HWND, lparam: LPARAM) -> BOOL {
     }
 
     return 1;
+}
+
+pub fn get_child_windows(hwnd: isize) -> Vec<isize> {
+    let mut window_list = Vec::<HWND>::new();
+    let result = unsafe {
+        EnumChildWindows(hwnd as HWND, Some(enum_child_windows), &mut window_list as *mut _ as _);
+    };
+    return window_list.into_iter().map(|a| a as isize).collect();
+}
+
+pub fn find_related_windows(hwnd: isize) -> Vec<isize> {
+    let mut windows_list = Vec::<isize>::new();
+    let thread_id = unsafe { GetWindowThreadProcessId(hwnd as HWND, null_mut()) };
+    unsafe {
+        EnumThreadWindows(thread_id, Some(enum_windows_proc), &mut windows_list as *mut _ as _)
+    };
+    windows_list
 }
 
 /// Finds all visible windows and returns them as a Vec.
